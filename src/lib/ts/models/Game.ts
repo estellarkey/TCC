@@ -197,7 +197,6 @@ export class Game {
         try {
             const tempChess = new Chess(fen);
 
-            // Verifica se ambos os reis estão presentes
             const pieces = tempChess.board().flat();
             const hasWhiteKing = pieces.some(p => p?.type === 'k' && p.color === 'w');
             const hasBlackKing = pieces.some(p => p?.type === 'k' && p.color === 'b');

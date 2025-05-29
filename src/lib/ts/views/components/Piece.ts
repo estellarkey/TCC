@@ -5,7 +5,7 @@ export class PieceView {
     public static createSvg(id: number): string {
         const svgId = this.pieceSvgIds[id];
         return `
-            <svg class="piece" width="40" height="40" viewBox="0 0 45 45">
+            <svg class="piece" draggable="false" width="40" height="40" viewBox="0 0 45 45">
                 <use xlink:href="${this.svgPath}#${svgId}" transform="scale(0.78) translate(9, 7)" />
             </svg>
         `;

@@ -50,7 +50,7 @@ export class AnimationService {
         await gsap.to(piece, {
             left: toRect.left + offsetX,
             top: toRect.top + offsetY,
-            duration: 0.5,
+            duration: 0.4,
             ease: 'power2.out'
         });
 

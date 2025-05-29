@@ -33,7 +33,7 @@ export class GameController implements IGameController {
         });
         this._moveHistory = new MoveHistory();
         this._players = [new Player('w'), new Player('b')];
-        this._boardView = new BoardView(this._game);
+        this._boardView = new BoardView(this._game, this);
         this._uiController = new UIController(this);
 
         this._dangerZoneManager = new DangerZoneManager(
@@ -147,42 +147,41 @@ export class GameController implements IGameController {
         this.clearSelection();
     }
 
-    private async executeMove(from: CellPosition, to: CellPosition): Promise<boolean> {
-        try {
-            await Promise.all([
-                this._boardView.animateMove(from, to),
-                this.delay(100)
-            ]);
+    public async executeMove(from: CellPosition, to: CellPosition): Promise<boolean> {
+    try {
+        const pieceAtDestination = this._game.getPiece(to.i, to.j);
+        const moveSuccess = this._game.movePiece(from, to);
 
-            const pieceAtDestination = this._game.getPiece(to.i, to.j);
-            const moveSuccess = this._game.movePiece(from, to);
+        if (await moveSuccess) {
+            // Animação após movimentação lógica
+            await this._boardView.animateMove(from, to);
 
-            if (await moveSuccess) {
-                if (pieceAtDestination) {
-                    AudioService.play('capture');
-                } else {
-                    AudioService.play('move');
-                }
-
-                this._boardView.updateBoard();
-                this.recordMove();
-
-                const currentTurn = this._game.getCurrentTurn();
-                const opponentColor = currentTurn === 'w' ? 'b' : 'w';
-                if (this._game.isKingInDanger(opponentColor)) {
-                    AudioService.play('check');
-                }
-
-                return true;
+            if (pieceAtDestination) {
+                AudioService.play('capture');
+            } else {
+                AudioService.play('move');
             }
-            return false;
-        } catch (error) {
-            console.error('Error executing move:', error);
-            return false;
-        }
-    }
 
-    private async botTurn(): Promise<void> {
+            this._boardView.updateBoard();
+            this.recordMove();
+
+            const currentTurn = this._game.getCurrentTurn();
+            const opponentColor = currentTurn === 'w' ? 'b' : 'w';
+            if (this._game.isKingInDanger(opponentColor)) {
+                AudioService.play('check');
+            }
+
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error('Error executing move:', error);
+        return false;
+    }
+}
+
+
+    public async botTurn(): Promise<void> {
         if (!this._botService || this._gameMode !== 'singleplayer') {
             return;
         }

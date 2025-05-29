@@ -1,0 +1,7 @@
+{
+	"/": [],
+	"/3d": [],
+	"/3d/api/asset": [
+		"src/routes/3d/api/asset/+server.ts"
+	]
+}
