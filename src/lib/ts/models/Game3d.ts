@@ -29,6 +29,16 @@ export class Chess3DGame {
   private bot!: ChessBot;
   private isPlayerTurn: boolean = true;
   private logObject: THREE.Object3D | null = null;
+  private isDragging = false;
+  private dragPlane!: THREE.Mesh;
+  private dragOffset = new THREE.Vector3();
+  private originalPosition = new THREE.Vector3();
+  private audioContext!: AudioContext;
+  private moveSound!: AudioBuffer;
+  private captureSound!: AudioBuffer;
+  private checkSound!: AudioBuffer;
+  private checkmateSound!: AudioBuffer;
+  private audioLoaded = false;
 
   constructor() {
     this.chess = new Chess();
@@ -40,6 +50,9 @@ export class Chess3DGame {
     this.initInteraction();
     this.animate();
     this.bot = new ChessBot(this.chess);
+    this.initDragPlane();
+    this.initDragEvents();
+    this.loadAudio();
   }
 
   private initScene(): void {
@@ -154,7 +167,7 @@ export class Chess3DGame {
   }
 
   private loadBoardModel(): void {
-   
+
     const modelUrl = "/3d/api/asset?name=Chessboard.glb";
 
     console.log(`Attempting to load chess board from: ${modelUrl}`);
@@ -171,8 +184,8 @@ export class Chess3DGame {
             child.material instanceof THREE.MeshStandardMaterial
           ) {
             if (child.name.includes("Chess Board")) {
-               child.castShadow = true;
-               child.receiveShadow = true;
+              child.castShadow = true;
+              child.receiveShadow = true;
             } else if (
               child.name.includes("Light_") ||
               child.name.includes("Dark_")
@@ -698,7 +711,7 @@ export class Chess3DGame {
       for (const [pieceType, patterns] of Object.entries(pieceNamePatterns)) {
         const positions =
           initialPositions[color][
-            pieceType as "k" | "q" | "b" | "n" | "r" | "p"
+          pieceType as "k" | "q" | "b" | "n" | "r" | "p"
           ];
 
         patterns.forEach((pattern, index) => {
@@ -742,8 +755,7 @@ export class Chess3DGame {
               pieceObj.visible = true;
               this.movePieceToPosition(pieceObj, position);
             } else {
-              // Se não encontrou a peça na posição, pode ser uma promoção
-              // Precisamos encontrar a peça promovida e movê-la para a nova posição
+  
               this.handlePromotedPiece(piece, position);
             }
           }
@@ -865,19 +877,89 @@ export class Chess3DGame {
 
     return null;
   }
+
   private checkForWin(): void {
     if (this.chess.isCheckmate()) {
       const winner = this.chess.turn() === "w" ? "Black" : "White";
       console.log(`Xeque-mate! ${winner} venceu!`);
-      alert(`Xeque-mate! ${winner} venceu!`); // Mostra um alerta simples
+      this.playSound(this.checkmateSound, 1.0);
+      alert(`Xeque-mate! ${winner} venceu!`);
 
       // Opcional: Desativar interações após o fim do jogo
       this.renderer.domElement.style.pointerEvents = "none";
     } else if (this.chess.isDraw()) {
       console.log("Empate!");
-      alert("Empate!"); // Mostra um alerta simples
+      alert("Empate!");
+    } else if (this.chess.isCheck()) {
+      console.log("Xeque!");
+      this.playSound(this.checkSound, 0.8);
     }
   }
+
+
+  private playSound(buffer: AudioBuffer, volume = 1.0, rate = 1.0): void {
+    if (!this.audioLoaded) return;
+
+    try {
+      const source = this.audioContext.createBufferSource();
+      const gainNode = this.audioContext.createGain();
+
+      source.buffer = buffer;
+      source.playbackRate.value = rate;
+      gainNode.gain.value = volume;
+
+      source.connect(gainNode);
+      gainNode.connect(this.audioContext.destination);
+
+      source.start(0);
+    } catch (error) {
+      console.error('Erro ao reproduzir som:', error);
+    }
+  }
+
+  private async loadAudio(): Promise<void> {
+    try {
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+
+      const sounds = {
+        move: '/sounds/move.mp3',
+        capture: '/sounds/capture.mp3',
+        check: '/sounds/check.mp3',
+        checkmate: '/sounds/checkmate.mp3'
+      };
+
+      const loadSound = async (url: string): Promise<AudioBuffer> => {
+        const response = await fetch(url);
+        const arrayBuffer = await response.arrayBuffer();
+        return await this.audioContext.decodeAudioData(arrayBuffer);
+      };
+
+      this.moveSound = await loadSound(sounds.move);
+      this.captureSound = await loadSound(sounds.capture);
+      this.checkSound = await loadSound(sounds.check);
+      this.checkmateSound = await loadSound(sounds.checkmate);
+
+      this.audioLoaded = true;
+      console.log('Todos os sons foram carregados com sucesso!');
+    } catch (error) {
+      console.error('Erro ao carregar sons:', error);
+
+    }
+  }
+
+
+  private createBeepSound(frequency: number, duration: number): AudioBuffer {
+    const buffer = this.audioContext.createBuffer(1, this.audioContext.sampleRate * duration, this.audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < data.length; i++) {
+      data[i] = Math.sin(2 * Math.PI * frequency * i / this.audioContext.sampleRate);
+    }
+
+    return buffer;
+  }
+
 
   private makeMove(from: string, to: string, isBotMove = false): void {
     try {
@@ -892,6 +974,13 @@ export class Chess3DGame {
       });
 
       if (move) {
+        // Tocar som de movimento ou captura
+        if (move.captured) {
+          this.playSound(this.captureSound, 0.7);
+        } else {
+          this.playSound(this.moveSound, 0.5);
+        }
+
         const pieceObj = this.pieceObjects.get(from);
         if (!pieceObj) return;
 
@@ -935,6 +1024,196 @@ export class Chess3DGame {
     }
   }
 
+  private initDragPlane(): void {
+    const planeGeometry = new THREE.PlaneGeometry(20, 20);
+    const planeMaterial = new THREE.MeshBasicMaterial({
+      visible: false,
+      side: THREE.DoubleSide
+    });
+    this.dragPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+    this.dragPlane.rotation.x = -Math.PI / 2;
+    this.dragPlane.position.y = 0;
+    this.scene.add(this.dragPlane);
+  }
+
+  private initDragEvents(): void {
+    const domElement = this.renderer.domElement;
+
+    // Evento de início do arrasto
+    domElement.addEventListener('mousedown', (event) => {
+      if (this.isPlayerTurn) {
+        this.handleMouseDown(event);
+      }
+    }, { passive: false });
+
+    // Evento durante o arrasto
+    domElement.addEventListener('mousemove', (event) => {
+      if (this.isDragging && this.isPlayerTurn) {
+        this.handleMouseMove(event);
+      }
+    }, { passive: false });
+
+    // Evento de término do arrasto
+    domElement.addEventListener('mouseup', (event) => {
+      if (this.isDragging && this.isPlayerTurn) {
+        this.handleMouseUp(event);
+      }
+    }, { passive: false });
+
+    // Para touch devices
+    domElement.addEventListener('touchstart', (event) => {
+      if (this.isPlayerTurn) {
+        event.preventDefault();
+        this.handleTouchStart(event);
+      }
+    }, { passive: false });
+
+    domElement.addEventListener('touchmove', (event) => {
+      if (this.isDragging && this.isPlayerTurn) {
+        event.preventDefault();
+        this.handleTouchMove(event);
+      }
+    }, { passive: false });
+
+    domElement.addEventListener('touchend', (event) => {
+      if (this.isDragging && this.isPlayerTurn) {
+        event.preventDefault();
+        this.handleTouchEnd(event);
+      }
+    }, { passive: false });
+  }
+
+  private handleMouseDown(event: MouseEvent): void {
+    event.preventDefault();
+
+    this.mouse.x = (event.clientX / this.renderer.domElement.clientWidth) * 2 - 1;
+    this.mouse.y = -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1;
+
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+
+    const pieces = Array.from(this.pieceObjects.values()).filter(p => p.visible);
+    const intersects = this.raycaster.intersectObjects(pieces, true);
+
+    if (intersects.length > 0) {
+      const clickedObject = intersects[0].object;
+      for (const [position, piece] of this.pieceObjects.entries()) {
+        if (piece === clickedObject || piece.children.includes(clickedObject)) {
+          const pieceColor = piece.name.toLowerCase().includes('light') ? 'w' : 'b';
+          if ((pieceColor === 'w' && this.isPlayerTurn) || (pieceColor === 'b' && !this.isPlayerTurn)) {
+            this.startDragging(piece, position);
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  private handleTouchStart(event: TouchEvent): void {
+    const touch = event.touches[0];
+    const mouseEvent = new MouseEvent('mousedown', {
+      clientX: touch.clientX,
+      clientY: touch.clientY
+    });
+    this.handleMouseDown(mouseEvent);
+  }
+
+  private startDragging(piece: THREE.Object3D, position: string): void {
+    this.isDragging = true;
+    this.selectedPiece = { position, object: piece };
+    this.originalPosition.copy(piece.position);
+
+    // Calcular offset entre o clique e a posição da peça
+    const intersects = this.raycaster.intersectObject(this.dragPlane);
+    if (intersects.length > 0) {
+      this.dragOffset.copy(intersects[0].point).sub(piece.position);
+    }
+
+    // Elevar a peça ligeiramente durante o arrasto
+    gsap.to(piece.position, {
+      y: this.originalPosition.y + 0.5,
+      duration: 0.2
+    });
+
+    this.highlightPiece(position);
+  }
+
+  private handleMouseMove(event: MouseEvent): void {
+    event.preventDefault();
+
+    this.mouse.x = (event.clientX / this.renderer.domElement.clientWidth) * 2 - 1;
+    this.mouse.y = -(event.clientY / this.renderer.domElement.clientHeight) * 2 + 1;
+
+    this.updateDraggedPiece();
+  }
+
+  private handleTouchMove(event: TouchEvent): void {
+    const touch = event.touches[0];
+    const mouseEvent = new MouseEvent('mousemove', {
+      clientX: touch.clientX,
+      clientY: touch.clientY
+    });
+    this.handleMouseMove(mouseEvent);
+  }
+
+  private updateDraggedPiece(): void {
+    if (!this.selectedPiece) return;
+
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const intersects = this.raycaster.intersectObject(this.dragPlane);
+
+    if (intersects.length > 0) {
+      const newPosition = intersects[0].point.clone().sub(this.dragOffset);
+      this.selectedPiece.object.position.set(newPosition.x, this.selectedPiece.object.position.y, newPosition.z);
+    }
+  }
+
+  private handleMouseUp(event: MouseEvent): void {
+    event.preventDefault();
+    this.finishDragging();
+  }
+
+  private handleTouchEnd(event: TouchEvent): void {
+    event.preventDefault();
+    this.finishDragging();
+  }
+
+  private finishDragging(): void {
+    if (!this.isDragging || !this.selectedPiece) return;
+
+    this.isDragging = false;
+
+    // Verificar se soltou em uma posição válida
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const intersects = this.raycaster.intersectObject(this.chessBoard || this.dragPlane, true);
+
+    if (intersects.length > 0) {
+      const targetPosition = this.getPositionFromIntersect(intersects[0]);
+      if (targetPosition) {
+        this.tryMove(this.selectedPiece.position, targetPosition);
+      } else {
+        // Retornar à posição original se não for um movimento válido
+        this.returnPieceToOriginalPosition();
+      }
+    } else {
+      this.returnPieceToOriginalPosition();
+    }
+
+    this.removeHighlight();
+    this.selectedPiece = null;
+  }
+
+  private returnPieceToOriginalPosition(): void {
+    if (!this.selectedPiece) return;
+
+    gsap.to(this.selectedPiece.object.position, {
+      x: this.originalPosition.x,
+      y: this.originalPosition.y,
+      z: this.originalPosition.z,
+      duration: 0.3,
+      ease: "power2.out"
+    });
+  }
+
   private tryMove(from: string, to: string): void {
     const piece = this.chess.get(from as Square);
     if (
@@ -950,11 +1229,13 @@ export class Chess3DGame {
     try {
       const fromSquare = from as Square;
       const toSquare = to as Square;
-
       const piece = this.chess.get(fromSquare);
+
       if (!piece) return;
 
-      // Verifica se é um movimento de roque
+      // Verifica se há uma peça no quadrado de destino ANTES do movimento
+      const potentialCapture = this.chess.get(toSquare);
+
       if (
         piece.type === "k" &&
         Math.abs(from.charCodeAt(0) - to.charCodeAt(0)) === 2
@@ -963,11 +1244,10 @@ export class Chess3DGame {
         return;
       }
 
-      // Verifica se é uma captura en passant - FORMA CORRETA
       const moveOptions = this.chess.moves({ verbose: true });
       const enPassantMove = moveOptions.find(
         (m: { from: any; to: any; flags: string | string[] }) =>
-          m.from === fromSquare && m.to === toSquare && m.flags.includes("e") // 'e' indica captura en passant
+          m.from === fromSquare && m.to === toSquare && m.flags.includes("e")
       );
 
       if (piece.type === "p" && enPassantMove) {
@@ -982,6 +1262,19 @@ export class Chess3DGame {
       });
 
       if (move) {
+        // Tocar sons APÓS confirmar o movimento válido
+        if (move.captured) {
+          this.playSound(this.captureSound, 0.7);
+        } else {
+          this.playSound(this.moveSound, 0.5);
+        }
+
+        if (this.chess.isCheckmate()) {
+          this.playSound(this.checkmateSound, 1.0);
+        } else if (this.chess.isCheck()) {
+          this.playSound(this.checkSound, 0.8);
+        }
+
         this.handleRegularMove(from, to, move.captured);
       }
     } catch (e) {
@@ -1072,7 +1365,7 @@ export class Chess3DGame {
     const move = this.chess.move({ from, to, promotion: "q" });
     if (!move) return;
 
-    // Encontra a posição do peão capturado (sempre na mesma coluna do destino e linha de origem)
+  
     const capturedPawnPos = (to[0] + from[1]) as Square;
 
     const pieceObj = this.pieceObjects.get(from);
@@ -1103,31 +1396,31 @@ export class Chess3DGame {
     onComplete: () => void
   ): void {
     const targetPos = this.get3DPositionFromChessNotation(to);
+
+
     gsap.to(piece.position, {
       x: targetPos.x,
       y: targetPos.y,
       z: targetPos.z,
-      duration: 0.3,
+      duration: 0.5,
       ease: "power2.out",
       onComplete: () => {
         piece.updateMatrix();
         onComplete();
-      },
+      }
     });
   }
 
-  // Adicione este método para o bot fazer seu movimento
   private makeBotMove(): void {
-    // Desativa interação durante o movimento do bot
     this.renderer.domElement.style.pointerEvents = "none";
 
-    // Usa o método de avaliação simples (ou random para um bot mais básico)
     const botMove = this.bot.makeSimpleEvaluatedMove();
 
     if (botMove) {
-      setTimeout(() => {
+      // Pequeno atraso para melhor experiência visual
+      gsap.delayedCall(0.5, () => {
         this.executeBotMove(botMove.from, botMove.to);
-      }, 500); // Pequeno atraso para melhor experiência
+      });
     }
   }
 
@@ -1142,7 +1435,14 @@ export class Chess3DGame {
     const move = this.chess.move({ from, to, promotion: "q" });
 
     if (move) {
-      // Remove peça capturada se existir
+      // Tocar som de movimento ou captura
+      if (move.captured) {
+        this.playSound(this.captureSound, 0.7);
+      } else {
+        this.playSound(this.moveSound, 0.5);
+      }
+
+      // Remove a peça capturada se existir
       if (capturedPiece) {
         const capturedPieceObj = this.pieceObjects.get(toStr);
         if (capturedPieceObj) {
